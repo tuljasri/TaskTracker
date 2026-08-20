@@ -33,4 +33,8 @@ const taskSchema = new mongoose.Schema(
     }
 );
 
+taskSchema.index({ completed: 1 });
+taskSchema.index({ priority: 1 });
+taskSchema.index({ dueDate: 1 });
+
 module.exports = mongoose.model("Task", taskSchema);

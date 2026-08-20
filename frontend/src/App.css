@@ -381,10 +381,19 @@ body {
   color: #6b7280;
 }
 
-/* Dark Mode */
-
 .dark-mode {
   background: #111827;
+  color: #f9fafb;
+}
+
+.dark-mode .header h1,
+.dark-mode .header p,
+.dark-mode .form-card h2,
+.dark-mode .analytics-section h2,
+.dark-mode .section-header h2,
+.dark-mode .section-header span,
+.dark-mode .task-title-row h3,
+.dark-mode .task-form label {
   color: #f9fafb;
 }
 
@@ -420,10 +429,17 @@ body {
 
 .dark-mode .description,
 .dark-mode .due-date,
-.dark-mode .section-header span,
 .dark-mode .analytics-card h3,
 .dark-mode .pagination span {
   color: #9ca3af;
+}
+
+.dark-mode .analytics-card p {
+  color: #60a5fa;
+}
+
+.dark-mode .empty-state {
+  color: #d1d5db;
 }
 
 .dark-mode .empty-state h3 {
@@ -445,7 +461,15 @@ body {
   color: #9ca3af;
 }
 
-/* Mobile */
+.dark-mode .status-pending {
+  background: #78350f;
+  color: #fef3c7;
+}
+
+.dark-mode .status-completed {
+  background: #14532d;
+  color: #dcfce7;
+}
 
 @media (max-width: 700px) {
   .analytics-cards {

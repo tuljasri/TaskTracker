@@ -28,72 +28,107 @@ function App() {
 
   const [darkMode, setDarkMode] = useState(false);
 
+  // Fetch tasks
   const fetchTasks = async () => {
     try {
       setLoading(true);
       setError("");
 
       const response = await axios.get(API_URL);
-      setTasks(response.data);
+
+      // Supports both:
+      // 1. Old backend: response.data = [...]
+      // 2. New backend: response.data = { tasks: [...] }
+      const taskData = Array.isArray(response.data)
+        ? response.data
+        : Array.isArray(response.data.tasks)
+          ? response.data.tasks
+          : [];
+
+      setTasks(taskData);
     } catch (error) {
       console.error("Error fetching tasks:", error);
+
       setError(
         "Unable to load tasks. Please make sure the backend is running."
       );
+
+      setTasks([]);
     } finally {
       setLoading(false);
     }
   };
 
+  // Create or update task
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     if (submitting) return;
 
+    if (!title.trim()) {
+      setError("Task title is required.");
+      return;
+    }
+
     try {
       setSubmitting(true);
       setError("");
 
-      if (editingId) {
-        const response = await axios.put(`${API_URL}/${editingId}`, {
-          title,
-          description,
-          dueDate,
-          priority,
-        });
+      const taskData = {
+        title: title.trim(),
+        description: description.trim(),
+        dueDate: dueDate || undefined,
+        priority,
+      };
 
-        setTasks(
-          tasks.map((task) =>
+      if (editingId) {
+        const response = await axios.put(
+          `${API_URL}/${editingId}`,
+          taskData
+        );
+
+        setTasks((previousTasks) =>
+          previousTasks.map((task) =>
             task._id === editingId ? response.data : task
           )
         );
 
         setEditingId(null);
       } else {
-        const response = await axios.post(API_URL, {
-          title,
-          description,
-          dueDate,
-          priority,
-        });
+        const response = await axios.post(API_URL, taskData);
 
-        setTasks([...tasks, response.data]);
+        setTasks((previousTasks) => [
+          ...previousTasks,
+          response.data,
+        ]);
       }
 
       clearForm();
+      setCurrentPage(1);
     } catch (error) {
       console.error("Error saving task:", error);
-      setError("Unable to save the task. Please try again.");
+
+      setError(
+        error.response?.data?.message ||
+          "Unable to save the task. Please try again."
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
+  // Edit task
   const editTask = (task) => {
     setEditingId(task._id);
-    setTitle(task.title);
+    setTitle(task.title || "");
     setDescription(task.description || "");
-    setDueDate(task.dueDate ? task.dueDate.substring(0, 10) : "");
+
+    setDueDate(
+      task.dueDate
+        ? new Date(task.dueDate).toISOString().substring(0, 10)
+        : ""
+    );
+
     setPriority(task.priority || "Medium");
 
     window.scrollTo({
@@ -102,11 +137,13 @@ function App() {
     });
   };
 
+  // Cancel editing
   const cancelEdit = () => {
     setEditingId(null);
     clearForm();
   };
 
+  // Clear form
   const clearForm = () => {
     setTitle("");
     setDescription("");
@@ -114,63 +151,110 @@ function App() {
     setPriority("Medium");
   };
 
+  // Toggle completed/pending
   const toggleTask = async (task) => {
     try {
+      setError("");
+
       const response = await axios.put(`${API_URL}/${task._id}`, {
         completed: !task.completed,
       });
 
-      setTasks(
-        tasks.map((t) =>
+      setTasks((previousTasks) =>
+        previousTasks.map((t) =>
           t._id === task._id ? response.data : t
         )
       );
     } catch (error) {
       console.error("Error updating task:", error);
+
+      setError("Unable to update the task.");
     }
   };
 
+  // Delete task
   const deleteTask = async (id) => {
     try {
+      setError("");
+
       await axios.delete(`${API_URL}/${id}`);
 
-      setTasks(tasks.filter((task) => task._id !== id));
+      setTasks((previousTasks) =>
+        previousTasks.filter((task) => task._id !== id)
+      );
+
+      // Prevent being stuck on an empty page
+      setCurrentPage((page) => Math.max(page - 1, 1));
     } catch (error) {
       console.error("Error deleting task:", error);
+
+      setError("Unable to delete the task.");
     }
   };
 
+  // Fetch tasks when application loads
   useEffect(() => {
     fetchTasks();
   }, []);
 
+  // Search + filters
   const filteredTasks = tasks
-    .filter((task) =>
-      task.title.toLowerCase().includes(searchTerm.toLowerCase())
-    )
     .filter((task) => {
-      if (statusFilter === "Pending") return !task.completed;
-      if (statusFilter === "Completed") return task.completed;
+      const titleText = (task.title || "").toLowerCase();
+      const descriptionText = (
+        task.description || ""
+      ).toLowerCase();
+
+      const search = searchTerm.toLowerCase();
+
+      return (
+        titleText.includes(search) ||
+        descriptionText.includes(search)
+      );
+    })
+    .filter((task) => {
+      if (statusFilter === "Pending") {
+        return !task.completed;
+      }
+
+      if (statusFilter === "Completed") {
+        return task.completed;
+      }
+
       return true;
     })
     .filter((task) => {
-      if (priorityFilter === "All") return true;
+      if (priorityFilter === "All") {
+        return true;
+      }
+
       return (task.priority || "Medium") === priorityFilter;
     });
 
+  // Sorting
   const sortedTasks = [...filteredTasks].sort((a, b) => {
     if (sortBy === "Newest") {
-      return new Date(b.createdAt) - new Date(a.createdAt);
+      return (
+        new Date(b.createdAt || 0) -
+        new Date(a.createdAt || 0)
+      );
     }
 
     if (sortBy === "Oldest") {
-      return new Date(a.createdAt) - new Date(b.createdAt);
+      return (
+        new Date(a.createdAt || 0) -
+        new Date(b.createdAt || 0)
+      );
     }
 
     if (sortBy === "Due Date") {
       if (!a.dueDate) return 1;
       if (!b.dueDate) return -1;
-      return new Date(a.dueDate) - new Date(b.dueDate);
+
+      return (
+        new Date(a.dueDate) -
+        new Date(b.dueDate)
+      );
     }
 
     if (sortBy === "Priority") {
@@ -189,22 +273,42 @@ function App() {
     return 0;
   });
 
-  const totalPages = Math.ceil(sortedTasks.length / tasksPerPage);
+  // Pagination
+  const totalPages = Math.max(
+    Math.ceil(sortedTasks.length / tasksPerPage),
+    1
+  );
 
-  const startIndex = (currentPage - 1) * tasksPerPage;
+  // Keep current page valid
+  const safeCurrentPage = Math.min(
+    currentPage,
+    totalPages
+  );
+
+  const startIndex =
+    (safeCurrentPage - 1) * tasksPerPage;
 
   const displayedTasks = sortedTasks.slice(
     startIndex,
     startIndex + tasksPerPage
   );
 
+  // Analytics
   const totalTasks = tasks.length;
-  const completedTasks = tasks.filter((task) => task.completed).length;
-  const pendingTasks = totalTasks - completedTasks;
-  const highPriorityTasks = tasks.filter(
-    (task) => (task.priority || "Medium") === "High"
+
+  const completedTasks = tasks.filter(
+    (task) => task.completed
   ).length;
 
+  const pendingTasks =
+    totalTasks - completedTasks;
+
+  const highPriorityTasks = tasks.filter(
+    (task) =>
+      (task.priority || "Medium") === "High"
+  ).length;
+
+  // Search/filter/sort handlers
   const handleSearchChange = (e) => {
     setSearchTerm(e.target.value);
     setCurrentPage(1);
@@ -227,34 +331,52 @@ function App() {
 
   return (
     <div className={`app ${darkMode ? "dark-mode" : ""}`}>
+      {/* Header */}
       <header className="header">
         <h1>Task Tracker</h1>
-        <p>Organize your tasks and stay productive.</p>
+
+        <p>
+          Organize your tasks and stay productive.
+        </p>
 
         <button
           className="theme-btn"
-          onClick={() => setDarkMode(!darkMode)}
+          onClick={() => setDarkMode((mode) => !mode)}
         >
-          {darkMode ? "☀️ Light Mode" : "🌙 Dark Mode"}
+          {darkMode
+            ? "☀️ Light Mode"
+            : "🌙 Dark Mode"}
         </button>
       </header>
 
+      {/* Add/Edit Task */}
       <section className="form-card">
-        <h2>{editingId ? "Edit Task" : "Add New Task"}</h2>
+        <h2>
+          {editingId
+            ? "Edit Task"
+            : "Add New Task"}
+        </h2>
 
-        <form onSubmit={handleSubmit} className="task-form">
+        <form
+          onSubmit={handleSubmit}
+          className="task-form"
+        >
           <input
             type="text"
             placeholder="Task title"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) =>
+              setTitle(e.target.value)
+            }
             required
           />
 
           <textarea
             placeholder="Task description"
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) =>
+              setDescription(e.target.value)
+            }
             rows="3"
           />
 
@@ -263,14 +385,18 @@ function App() {
           <input
             type="date"
             value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
+            onChange={(e) =>
+              setDueDate(e.target.value)
+            }
           />
 
           <label>Priority</label>
 
           <select
             value={priority}
-            onChange={(e) => setPriority(e.target.value)}
+            onChange={(e) =>
+              setPriority(e.target.value)
+            }
           >
             <option value="Low">Low</option>
             <option value="Medium">Medium</option>
@@ -286,8 +412,8 @@ function App() {
               {submitting
                 ? "Saving..."
                 : editingId
-                ? "Update Task"
-                : "Add Task"}
+                  ? "Update Task"
+                  : "Add Task"}
             </button>
 
             {editingId && (
@@ -304,6 +430,7 @@ function App() {
         </form>
       </section>
 
+      {/* Analytics */}
       <section className="analytics-section">
         <div className="section-header">
           <h2>Analytics</h2>
@@ -332,12 +459,17 @@ function App() {
         </div>
       </section>
 
+      {/* Tasks */}
       <section className="tasks-section">
         <div className="section-header">
           <h2>My Tasks</h2>
-          <span>{filteredTasks.length} task(s)</span>
+
+          <span>
+            {filteredTasks.length} task(s)
+          </span>
         </div>
 
+        {/* Search and Filters */}
         <div className="search-filters">
           <input
             type="text"
@@ -350,18 +482,28 @@ function App() {
             value={statusFilter}
             onChange={handleStatusChange}
           >
-            <option value="All">All Status</option>
-            <option value="Pending">Pending</option>
-            <option value="Completed">Completed</option>
+            <option value="All">
+              All Status
+            </option>
+            <option value="Pending">
+              Pending
+            </option>
+            <option value="Completed">
+              Completed
+            </option>
           </select>
 
           <select
             value={priorityFilter}
             onChange={handlePriorityChange}
           >
-            <option value="All">All Priority</option>
+            <option value="All">
+              All Priority
+            </option>
             <option value="High">High</option>
-            <option value="Medium">Medium</option>
+            <option value="Medium">
+              Medium
+            </option>
             <option value="Low">Low</option>
           </select>
 
@@ -369,136 +511,182 @@ function App() {
             value={sortBy}
             onChange={handleSortChange}
           >
-            <option value="Newest">Newest</option>
-            <option value="Oldest">Oldest</option>
-            <option value="Due Date">Due Date</option>
-            <option value="Priority">Priority</option>
+            <option value="Newest">
+              Newest
+            </option>
+            <option value="Oldest">
+              Oldest
+            </option>
+            <option value="Due Date">
+              Due Date
+            </option>
+            <option value="Priority">
+              Priority
+            </option>
           </select>
         </div>
 
+        {/* Loading */}
         {loading && (
           <div className="loading-message">
             Loading tasks...
           </div>
         )}
 
+        {/* Error */}
         {error && (
           <div className="error-message">
             {error}
           </div>
         )}
 
-        {!loading && !error && filteredTasks.length === 0 && (
-          <div className="empty-state">
-            <h3>No tasks found</h3>
-            <p>Add a task or change your search/filter.</p>
-          </div>
-        )}
+        {/* Empty state */}
+        {!loading &&
+          !error &&
+          filteredTasks.length === 0 && (
+            <div className="empty-state">
+              <h3>No tasks found</h3>
 
-        {!loading && !error && displayedTasks.length > 0 && (
-          <>
-            <div className="task-list">
-              {displayedTasks.map((task) => (
-                <div
-                  className={`task-card ${
-                    task.completed ? "completed" : ""
-                  }`}
-                  key={task._id}
-                >
-                  <div className="task-content">
-                    <div className="task-title-row">
-                      <h3>{task.title}</h3>
+              <p>
+                Add a task or change your
+                search/filter.
+              </p>
+            </div>
+          )}
 
-                      <span
-                        className={`status ${
-                          task.completed
-                            ? "status-completed"
-                            : "status-pending"
-                        }`}
+        {/* Task list */}
+        {!loading &&
+          !error &&
+          displayedTasks.length > 0 && (
+            <>
+              <div className="task-list">
+                {displayedTasks.map((task) => (
+                  <div
+                    className={`task-card ${
+                      task.completed
+                        ? "completed"
+                        : ""
+                    }`}
+                    key={task._id}
+                  >
+                    <div className="task-content">
+                      <div className="task-title-row">
+                        <h3>{task.title}</h3>
+
+                        <span
+                          className={`status ${
+                            task.completed
+                              ? "status-completed"
+                              : "status-pending"
+                          }`}
+                        >
+                          {task.completed
+                            ? "Completed"
+                            : "Pending"}
+                        </span>
+                      </div>
+
+                      <p className="description">
+                        {task.description ||
+                          "No description"}
+                      </p>
+
+                      <p className="due-date">
+                        📅{" "}
+                        {task.dueDate
+                          ? new Date(
+                              task.dueDate
+                            ).toLocaleDateString()
+                          : "No due date"}
+                      </p>
+
+                      <p
+                        className={`priority priority-${(
+                          task.priority ||
+                          "Medium"
+                        ).toLowerCase()}`}
                       >
-                        {task.completed
-                          ? "Completed"
-                          : "Pending"}
-                      </span>
+                        Priority:{" "}
+                        {task.priority ||
+                          "Medium"}
+                      </p>
                     </div>
 
-                    <p className="description">
-                      {task.description || "No description"}
-                    </p>
+                    <div className="task-actions">
+                      <button
+                        className="complete-btn"
+                        onClick={() =>
+                          toggleTask(task)
+                        }
+                      >
+                        {task.completed
+                          ? "Mark Pending"
+                          : "Complete"}
+                      </button>
 
-                    <p className="due-date">
-                      📅{" "}
-                      {task.dueDate
-                        ? new Date(
-                            task.dueDate
-                          ).toLocaleDateString()
-                        : "No due date"}
-                    </p>
+                      <button
+                        className="edit-btn"
+                        onClick={() =>
+                          editTask(task)
+                        }
+                      >
+                        Edit
+                      </button>
 
-                    <p
-                      className={`priority priority-${(
-                        task.priority || "Medium"
-                      ).toLowerCase()}`}
-                    >
-                      Priority: {task.priority || "Medium"}
-                    </p>
+                      <button
+                        className="delete-btn"
+                        onClick={() =>
+                          deleteTask(task._id)
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
-
-                  <div className="task-actions">
-                    <button
-                      className="complete-btn"
-                      onClick={() => toggleTask(task)}
-                    >
-                      {task.completed
-                        ? "Mark Pending"
-                        : "Complete"}
-                    </button>
-
-                    <button
-                      className="edit-btn"
-                      onClick={() => editTask(task)}
-                    >
-                      Edit
-                    </button>
-
-                    <button
-                      className="delete-btn"
-                      onClick={() => deleteTask(task._id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {totalPages > 1 && (
-              <div className="pagination">
-                <button
-                  disabled={currentPage === 1}
-                  onClick={() =>
-                    setCurrentPage(currentPage - 1)
-                  }
-                >
-                  Previous
-                </button>
-
-                <span>
-                  Page {currentPage} of {totalPages}
-                </span>
-
-                <button
-                  disabled={currentPage === totalPages}
-                  onClick={() =>
-                    setCurrentPage(currentPage + 1)
-                  }
-                >
-                  Next
-                </button>
+                ))}
               </div>
-            )}
-          </>
-        )}
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="pagination">
+                  <button
+                    disabled={safeCurrentPage === 1}
+                    onClick={() =>
+                      setCurrentPage(
+                        (page) =>
+                          Math.max(page - 1, 1)
+                      )
+                    }
+                  >
+                    Previous
+                  </button>
+
+                  <span>
+                    Page {safeCurrentPage} of{" "}
+                    {totalPages}
+                  </span>
+
+                  <button
+                    disabled={
+                      safeCurrentPage ===
+                      totalPages
+                    }
+                    onClick={() =>
+                      setCurrentPage(
+                        (page) =>
+                          Math.min(
+                            page + 1,
+                            totalPages
+                          )
+                      )
+                    }
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </>
+          )}
       </section>
     </div>
   );
