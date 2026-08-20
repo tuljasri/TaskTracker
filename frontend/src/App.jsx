@@ -6,7 +6,6 @@ const API_URL = "http://localhost:5000/api/tasks";
 
 function App() {
   const [tasks, setTasks] = useState([]);
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -14,17 +13,14 @@ function App() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [priority, setPriority] = useState("Medium");
 
-  // Stores the ID of the task currently being edited
   const [editingId, setEditingId] = useState(null);
 
-  // Stores the ID of the task currently being updated
-  const [updatingId, setUpdatingId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [priorityFilter, setPriorityFilter] = useState("All");
 
-  // Stores the ID of the task currently being deleted
-  const [deletingId, setDeletingId] = useState(null);
-
-  // Get all tasks
   const fetchTasks = async () => {
     try {
       setLoading(true);
@@ -42,7 +38,6 @@ function App() {
     }
   };
 
-  // Create or update a task
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -52,15 +47,19 @@ function App() {
       setSubmitting(true);
       setError("");
 
-      if (editingId) {
-        // Update existing task
-        const response = await axios.put(`${API_URL}/${editingId}`, {
-          title,
-          description,
-          dueDate,
-        });
+      const taskData = {
+        title,
+        description,
+        dueDate,
+        priority
+      };
 
-        // Keep "Saving..." visible briefly
+      if (editingId) {
+        const response = await axios.put(
+          `${API_URL}/${editingId}`,
+          taskData
+        );
+
         await new Promise((resolve) => setTimeout(resolve, 800));
 
         setTasks(
@@ -71,14 +70,8 @@ function App() {
 
         setEditingId(null);
       } else {
-        // Create new task
-        const response = await axios.post(API_URL, {
-          title,
-          description,
-          dueDate,
-        });
+        const response = await axios.post(API_URL, taskData);
 
-        // Keep "Saving..." visible briefly
         await new Promise((resolve) => setTimeout(resolve, 800));
 
         setTasks([...tasks, response.data]);
@@ -93,48 +86,36 @@ function App() {
     }
   };
 
-  // Put task data into the form for editing
   const editTask = (task) => {
     setEditingId(task._id);
     setTitle(task.title);
-    setDescription(task.description);
-    setDueDate(
-      task.dueDate ? task.dueDate.substring(0, 10) : ""
-    );
+    setDescription(task.description || "");
+    setDueDate(task.dueDate ? task.dueDate.substring(0, 10) : "");
+    setPriority(task.priority || "Medium");
 
     window.scrollTo({
       top: 0,
-      behavior: "smooth",
+      behavior: "smooth"
     });
   };
 
-  // Cancel editing
   const cancelEdit = () => {
     setEditingId(null);
     clearForm();
   };
 
-  // Clear form
   const clearForm = () => {
     setTitle("");
     setDescription("");
     setDueDate("");
+    setPriority("Medium");
   };
 
-  // Toggle task status
   const toggleTask = async (task) => {
-    if (updatingId || deletingId) return;
-
     try {
-      setUpdatingId(task._id);
-      setError("");
-
       const response = await axios.put(`${API_URL}/${task._id}`, {
-        completed: !task.completed,
+        completed: !task.completed
       });
-
-      // Keep feedback visible briefly
-      await new Promise((resolve) => setTimeout(resolve, 800));
 
       setTasks(
         tasks.map((t) =>
@@ -143,35 +124,46 @@ function App() {
       );
     } catch (error) {
       console.error("Error updating task:", error);
-      setError("Unable to update the task. Please try again.");
-    } finally {
-      setUpdatingId(null);
+      setError("Unable to update the task.");
     }
   };
 
-  // Delete a task
   const deleteTask = async (id) => {
-    if (deletingId || updatingId) return;
-
     try {
-      setDeletingId(id);
-      setError("");
-
       await axios.delete(`${API_URL}/${id}`);
 
-      // Keep "Deleting..." visible briefly
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      setTasks(
-        tasks.filter((task) => task._id !== id)
-      );
+      setTasks(tasks.filter((task) => task._id !== id));
     } catch (error) {
       console.error("Error deleting task:", error);
-      setError("Unable to delete the task. Please try again.");
-    } finally {
-      setDeletingId(null);
+      setError("Unable to delete the task.");
     }
   };
+
+  const filteredTasks = tasks.filter((task) => {
+    const matchesSearch =
+      task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (task.description || "")
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase());
+
+    const matchesStatus =
+      statusFilter === "All" ||
+      (statusFilter === "Completed" && task.completed) ||
+      (statusFilter === "Pending" && !task.completed);
+
+    const matchesPriority =
+      priorityFilter === "All" ||
+      (task.priority || "Medium") === priorityFilter;
+
+    return matchesSearch && matchesStatus && matchesPriority;
+  });
+
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter((task) => task.completed).length;
+  const pendingTasks = tasks.filter((task) => !task.completed).length;
+  const highPriorityTasks = tasks.filter(
+    (task) => (task.priority || "Medium") === "High"
+  ).length;
 
   useEffect(() => {
     fetchTasks();
@@ -184,11 +176,8 @@ function App() {
         <p>Organize your tasks and stay productive.</p>
       </header>
 
-      {/* Task Form */}
       <section className="form-card">
-        <h2>
-          {editingId ? "Edit Task" : "Add New Task"}
-        </h2>
+        <h2>{editingId ? "Edit Task" : "Add New Task"}</h2>
 
         <form onSubmit={handleSubmit} className="task-form">
           <input
@@ -214,6 +203,17 @@ function App() {
             onChange={(e) => setDueDate(e.target.value)}
           />
 
+          <label>Priority</label>
+
+          <select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+          >
+            <option value="Low">Low</option>
+            <option value="Medium">Medium</option>
+            <option value="High">High</option>
+          </select>
+
           <div className="form-buttons">
             <button
               type="submit"
@@ -223,8 +223,8 @@ function App() {
               {submitting
                 ? "Saving..."
                 : editingId
-                  ? "Update Task"
-                  : "Add Task"}
+                ? "Update Task"
+                : "Add Task"}
             </button>
 
             {editingId && (
@@ -241,37 +241,93 @@ function App() {
         </form>
       </section>
 
-      {/* Tasks */}
+      <section className="analytics-section">
+        <div className="section-header">
+          <h2>Analytics</h2>
+        </div>
+
+        <div className="analytics-cards">
+          <div className="analytics-card">
+            <h3>Total Tasks</h3>
+            <p>{totalTasks}</p>
+          </div>
+
+          <div className="analytics-card">
+            <h3>Completed</h3>
+            <p>{completedTasks}</p>
+          </div>
+
+          <div className="analytics-card">
+            <h3>Pending</h3>
+            <p>{pendingTasks}</p>
+          </div>
+
+          <div className="analytics-card">
+            <h3>High Priority</h3>
+            <p>{highPriorityTasks}</p>
+          </div>
+        </div>
+      </section>
+
       <section className="tasks-section">
         <div className="section-header">
           <h2>My Tasks</h2>
-          <span>{tasks.length} task(s)</span>
+          <span>{filteredTasks.length} task(s)</span>
         </div>
 
-        {/* Loading message */}
+        <div className="search-filters">
+          <input
+            type="text"
+            placeholder="Search tasks..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="All">All Status</option>
+            <option value="Pending">Pending</option>
+            <option value="Completed">Completed</option>
+          </select>
+
+          <select
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value)}
+          >
+            <option value="All">All Priority</option>
+            <option value="High">High</option>
+            <option value="Medium">Medium</option>
+            <option value="Low">Low</option>
+          </select>
+        </div>
+
         {loading && (
           <div className="loading-message">
             Loading tasks...
           </div>
         )}
 
-        {/* Error message */}
         {error && (
           <div className="error-message">
             {error}
           </div>
         )}
 
-        {/* Empty state */}
-        {!loading && tasks.length === 0 && !error ? (
+        {!loading && filteredTasks.length === 0 && !error ? (
           <div className="empty-state">
-            <h3>No tasks yet</h3>
-            <p>Add your first task to get started.</p>
+            <h3>No tasks found</h3>
+            <p>
+              {tasks.length === 0
+                ? "Add your first task to get started."
+                : "Try changing your search or filters."}
+            </p>
           </div>
         ) : (
           !loading && (
             <div className="task-list">
-              {tasks.map((task) => (
+              {filteredTasks.map((task) => (
                 <div
                   className={`task-card ${
                     task.completed ? "completed" : ""
@@ -307,49 +363,40 @@ function App() {
                           ).toLocaleDateString()
                         : "No due date"}
                     </p>
+
+                    <p
+                      className={`priority priority-${(
+                        task.priority || "Medium"
+                      ).toLowerCase()}`}
+                    >
+                      Priority: {task.priority || "Medium"}
+                    </p>
                   </div>
 
                   <div className="task-actions">
-                    {/* Complete / Pending */}
                     <button
                       className="complete-btn"
                       onClick={() => toggleTask(task)}
-                      disabled={
-                        updatingId === task._id ||
-                        deletingId !== null
-                      }
                     >
-                      {updatingId === task._id
-                        ? "Updating..."
-                        : task.completed
-                          ? "Mark Pending"
-                          : "Complete"}
+                      {task.completed
+                        ? "Mark Pending"
+                        : "Complete"}
                     </button>
 
-                    {/* Edit */}
                     <button
                       className="edit-btn"
                       onClick={() => editTask(task)}
-                      disabled={
-                        updatingId !== null ||
-                        deletingId !== null
-                      }
                     >
                       Edit
                     </button>
 
-                    {/* Delete */}
                     <button
                       className="delete-btn"
-                      onClick={() => deleteTask(task._id)}
-                      disabled={
-                        deletingId === task._id ||
-                        updatingId !== null
+                      onClick={() =>
+                        deleteTask(task._id)
                       }
                     >
-                      {deletingId === task._id
-                        ? "Deleting..."
-                        : "Delete"}
+                      Delete
                     </button>
                   </div>
                 </div>
