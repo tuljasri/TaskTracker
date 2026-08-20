@@ -6,6 +6,7 @@ const API_URL = "http://localhost:5000/api/tasks";
 
 function App() {
   const [tasks, setTasks] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -20,6 +21,12 @@ function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [priorityFilter, setPriorityFilter] = useState("All");
+  const [sortBy, setSortBy] = useState("Newest");
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const tasksPerPage = 5;
+
+  const [darkMode, setDarkMode] = useState(false);
 
   const fetchTasks = async () => {
     try {
@@ -47,20 +54,13 @@ function App() {
       setSubmitting(true);
       setError("");
 
-      const taskData = {
-        title,
-        description,
-        dueDate,
-        priority
-      };
-
       if (editingId) {
-        const response = await axios.put(
-          `${API_URL}/${editingId}`,
-          taskData
-        );
-
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        const response = await axios.put(`${API_URL}/${editingId}`, {
+          title,
+          description,
+          dueDate,
+          priority,
+        });
 
         setTasks(
           tasks.map((task) =>
@@ -70,9 +70,12 @@ function App() {
 
         setEditingId(null);
       } else {
-        const response = await axios.post(API_URL, taskData);
-
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        const response = await axios.post(API_URL, {
+          title,
+          description,
+          dueDate,
+          priority,
+        });
 
         setTasks([...tasks, response.data]);
       }
@@ -95,7 +98,7 @@ function App() {
 
     window.scrollTo({
       top: 0,
-      behavior: "smooth"
+      behavior: "smooth",
     });
   };
 
@@ -114,7 +117,7 @@ function App() {
   const toggleTask = async (task) => {
     try {
       const response = await axios.put(`${API_URL}/${task._id}`, {
-        completed: !task.completed
+        completed: !task.completed,
       });
 
       setTasks(
@@ -124,7 +127,6 @@ function App() {
       );
     } catch (error) {
       console.error("Error updating task:", error);
-      setError("Unable to update the task.");
     }
   };
 
@@ -135,45 +137,106 @@ function App() {
       setTasks(tasks.filter((task) => task._id !== id));
     } catch (error) {
       console.error("Error deleting task:", error);
-      setError("Unable to delete the task.");
     }
   };
-
-  const filteredTasks = tasks.filter((task) => {
-    const matchesSearch =
-      task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (task.description || "")
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase());
-
-    const matchesStatus =
-      statusFilter === "All" ||
-      (statusFilter === "Completed" && task.completed) ||
-      (statusFilter === "Pending" && !task.completed);
-
-    const matchesPriority =
-      priorityFilter === "All" ||
-      (task.priority || "Medium") === priorityFilter;
-
-    return matchesSearch && matchesStatus && matchesPriority;
-  });
-
-  const totalTasks = tasks.length;
-  const completedTasks = tasks.filter((task) => task.completed).length;
-  const pendingTasks = tasks.filter((task) => !task.completed).length;
-  const highPriorityTasks = tasks.filter(
-    (task) => (task.priority || "Medium") === "High"
-  ).length;
 
   useEffect(() => {
     fetchTasks();
   }, []);
 
+  const filteredTasks = tasks
+    .filter((task) =>
+      task.title.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+    .filter((task) => {
+      if (statusFilter === "Pending") return !task.completed;
+      if (statusFilter === "Completed") return task.completed;
+      return true;
+    })
+    .filter((task) => {
+      if (priorityFilter === "All") return true;
+      return (task.priority || "Medium") === priorityFilter;
+    });
+
+  const sortedTasks = [...filteredTasks].sort((a, b) => {
+    if (sortBy === "Newest") {
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    }
+
+    if (sortBy === "Oldest") {
+      return new Date(a.createdAt) - new Date(b.createdAt);
+    }
+
+    if (sortBy === "Due Date") {
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return new Date(a.dueDate) - new Date(b.dueDate);
+    }
+
+    if (sortBy === "Priority") {
+      const priorityOrder = {
+        High: 1,
+        Medium: 2,
+        Low: 3,
+      };
+
+      return (
+        (priorityOrder[a.priority || "Medium"] || 2) -
+        (priorityOrder[b.priority || "Medium"] || 2)
+      );
+    }
+
+    return 0;
+  });
+
+  const totalPages = Math.ceil(sortedTasks.length / tasksPerPage);
+
+  const startIndex = (currentPage - 1) * tasksPerPage;
+
+  const displayedTasks = sortedTasks.slice(
+    startIndex,
+    startIndex + tasksPerPage
+  );
+
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter((task) => task.completed).length;
+  const pendingTasks = totalTasks - completedTasks;
+  const highPriorityTasks = tasks.filter(
+    (task) => (task.priority || "Medium") === "High"
+  ).length;
+
+  const handleSearchChange = (e) => {
+    setSearchTerm(e.target.value);
+    setCurrentPage(1);
+  };
+
+  const handleStatusChange = (e) => {
+    setStatusFilter(e.target.value);
+    setCurrentPage(1);
+  };
+
+  const handlePriorityChange = (e) => {
+    setPriorityFilter(e.target.value);
+    setCurrentPage(1);
+  };
+
+  const handleSortChange = (e) => {
+    setSortBy(e.target.value);
+    setCurrentPage(1);
+  };
+
   return (
-    <div className="app">
+    <div className={`app ${darkMode ? "dark-mode" : ""}`}>
       <header className="header">
         <h1>Task Tracker</h1>
         <p>Organize your tasks and stay productive.</p>
+
+        <button
+          className="theme-btn"
+          onClick={() => setDarkMode(!darkMode)}
+        >
+          {darkMode ? "☀️ Light Mode" : "🌙 Dark Mode"}
+        </button>
       </header>
 
       <section className="form-card">
@@ -280,12 +343,12 @@ function App() {
             type="text"
             placeholder="Search tasks..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={handleSearchChange}
           />
 
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={handleStatusChange}
           >
             <option value="All">All Status</option>
             <option value="Pending">Pending</option>
@@ -294,12 +357,22 @@ function App() {
 
           <select
             value={priorityFilter}
-            onChange={(e) => setPriorityFilter(e.target.value)}
+            onChange={handlePriorityChange}
           >
             <option value="All">All Priority</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>
+          </select>
+
+          <select
+            value={sortBy}
+            onChange={handleSortChange}
+          >
+            <option value="Newest">Newest</option>
+            <option value="Oldest">Oldest</option>
+            <option value="Due Date">Due Date</option>
+            <option value="Priority">Priority</option>
           </select>
         </div>
 
@@ -315,19 +388,17 @@ function App() {
           </div>
         )}
 
-        {!loading && filteredTasks.length === 0 && !error ? (
+        {!loading && !error && filteredTasks.length === 0 && (
           <div className="empty-state">
             <h3>No tasks found</h3>
-            <p>
-              {tasks.length === 0
-                ? "Add your first task to get started."
-                : "Try changing your search or filters."}
-            </p>
+            <p>Add a task or change your search/filter.</p>
           </div>
-        ) : (
-          !loading && (
+        )}
+
+        {!loading && !error && displayedTasks.length > 0 && (
+          <>
             <div className="task-list">
-              {filteredTasks.map((task) => (
+              {displayedTasks.map((task) => (
                 <div
                   className={`task-card ${
                     task.completed ? "completed" : ""
@@ -392,9 +463,7 @@ function App() {
 
                     <button
                       className="delete-btn"
-                      onClick={() =>
-                        deleteTask(task._id)
-                      }
+                      onClick={() => deleteTask(task._id)}
                     >
                       Delete
                     </button>
@@ -402,7 +471,33 @@ function App() {
                 </div>
               ))}
             </div>
-          )
+
+            {totalPages > 1 && (
+              <div className="pagination">
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() =>
+                    setCurrentPage(currentPage - 1)
+                  }
+                >
+                  Previous
+                </button>
+
+                <span>
+                  Page {currentPage} of {totalPages}
+                </span>
+
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() =>
+                    setCurrentPage(currentPage + 1)
+                  }
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
         )}
       </section>
     </div>

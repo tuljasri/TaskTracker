@@ -11,8 +11,10 @@ body {
 
 .app {
   max-width: 900px;
+  min-height: 100vh;
   margin: 0 auto;
   padding: 40px 20px 60px;
+  transition: background 0.3s ease, color 0.3s ease;
 }
 
 .header {
@@ -28,6 +30,22 @@ body {
 .header p {
   margin-top: 10px;
   color: #6b7280;
+}
+
+.theme-btn {
+  margin-top: 15px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 7px;
+  background: #1f2937;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.theme-btn:hover {
+  opacity: 0.85;
 }
 
 .form-card {
@@ -335,6 +353,100 @@ body {
   color: #374151;
 }
 
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+  margin-top: 25px;
+}
+
+.pagination button {
+  border: none;
+  padding: 9px 14px;
+  border-radius: 7px;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.pagination button:disabled {
+  background: #d1d5db;
+  cursor: not-allowed;
+}
+
+.pagination span {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+/* Dark Mode */
+
+.dark-mode {
+  background: #111827;
+  color: #f9fafb;
+}
+
+.dark-mode .header p {
+  color: #9ca3af;
+}
+
+.dark-mode .form-card,
+.dark-mode .analytics-card,
+.dark-mode .task-card,
+.dark-mode .empty-state,
+.dark-mode .loading-message {
+  background: #1f2937;
+  color: #f9fafb;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+}
+
+.dark-mode .task-form input,
+.dark-mode .task-form textarea,
+.dark-mode .task-form select,
+.dark-mode .search-filters input,
+.dark-mode .search-filters select {
+  background: #374151;
+  color: #f9fafb;
+  border-color: #4b5563;
+}
+
+.dark-mode .task-form input::placeholder,
+.dark-mode .task-form textarea::placeholder,
+.dark-mode .search-filters input::placeholder {
+  color: #9ca3af;
+}
+
+.dark-mode .description,
+.dark-mode .due-date,
+.dark-mode .section-header span,
+.dark-mode .analytics-card h3,
+.dark-mode .pagination span {
+  color: #9ca3af;
+}
+
+.dark-mode .empty-state h3 {
+  color: #f9fafb;
+}
+
+.dark-mode .cancel-btn {
+  background: #374151;
+  color: #f9fafb;
+}
+
+.dark-mode .theme-btn {
+  background: #f9fafb;
+  color: #111827;
+}
+
+.dark-mode .pagination button:disabled {
+  background: #4b5563;
+  color: #9ca3af;
+}
+
+/* Mobile */
+
 @media (max-width: 700px) {
   .analytics-cards {
     grid-template-columns: repeat(2, 1fr);
@@ -383,5 +495,9 @@ body {
   .search-filters input,
   .search-filters select {
     width: 100%;
+  }
+
+  .pagination {
+    gap: 10px;
   }
 }
