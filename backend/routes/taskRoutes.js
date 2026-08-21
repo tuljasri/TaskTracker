@@ -1,65 +1,161 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const Task = require("../models/Task");
+const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-
 // =====================================================
-// CREATE TASK
+// GET TASK ANALYTICS / STATS
+// Must be declared before /:id route!
 // =====================================================
-// =====================================================
-// CREATE TASK
-// =====================================================
-router.post("/", async (req, res, next) => {
+router.get("/analytics", authMiddleware, async (req, res, next) => {
   try {
-    console.log("RECEIVED FROM FRONTEND:", req.body);
+    const userId = new mongoose.Types.ObjectId(req.user.userId);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    const {
-      title,
-      description,
-      status,
-      priority,
-      dueDate
-    } = req.body;
+    const [stats] = await Task.aggregate([
+      {
+        $match: { user: userId }
+      },
+      {
+        $facet: {
+          total: [{ $count: "count" }],
+          byStatus: [
+            {
+              $group: {
+                _id: "$status",
+                count: { $sum: 1 }
+              }
+            }
+          ],
+          byPriority: [
+            {
+              $group: {
+                _id: "$priority",
+                count: { $sum: 1 }
+              }
+            }
+          ],
+          overdue: [
+            {
+              $match: {
+                status: { $ne: "Done" },
+                dueDate: { $lt: today, $ne: null }
+              }
+            },
+            { $count: "count" }
+          ]
+        }
+      }
+    ]);
 
-    // Keep the status sent by frontend
-    const finalStatus = status || "Todo";
+    const totalTasks = stats?.total?.[0]?.count || 0;
 
-    // Validate status
-    if (!["Todo", "In Progress", "Done"].includes(finalStatus)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid status"
-      });
-    }
+    let todoTasks = 0;
+    let inProgressTasks = 0;
+    let completedTasks = 0;
 
-    const task = await Task.create({
-      title,
-      description,
-      status: finalStatus,
-      priority,
-      dueDate: dueDate || undefined
+    (stats?.byStatus || []).forEach((item) => {
+      if (item._id === "Todo") todoTasks = item.count;
+      else if (item._id === "In Progress") inProgressTasks = item.count;
+      else if (item._id === "Done") completedTasks = item.count;
     });
 
-    console.log("SAVED TO DATABASE:", task);
+    const pendingTasks = todoTasks + inProgressTasks;
 
-    res.status(201).json(task);
+    let lowPriorityTasks = 0;
+    let mediumPriorityTasks = 0;
+    let highPriorityTasks = 0;
 
+    (stats?.byPriority || []).forEach((item) => {
+      if (item._id === "Low") lowPriorityTasks = item.count;
+      else if (item._id === "Medium") mediumPriorityTasks = item.count;
+      else if (item._id === "High") highPriorityTasks = item.count;
+    });
+
+    const overdueTasks = stats?.overdue?.[0]?.count || 0;
+
+    const completionPercentage =
+      totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
+
+    res.json({
+      success: true,
+      data: {
+        totalTasks,
+        completedTasks,
+        pendingTasks,
+        todoTasks,
+        inProgressTasks,
+        highPriorityTasks,
+        mediumPriorityTasks,
+        lowPriorityTasks,
+        overdueTasks,
+        completionPercentage
+      }
+    });
   } catch (error) {
-    console.error("CREATE TASK ERROR:", error);
     next(error);
   }
 });
 
-
 // =====================================================
-// GET ALL TASKS
-// FILTERING + SORTING + PAGINATION
+// CREATE TASK
 // =====================================================
-router.get("/", async (req, res, next) => {
+router.post("/", authMiddleware, async (req, res, next) => {
   try {
+    const { title, description, status, priority, dueDate } = req.body;
 
+    if (!title || !title.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Task title is required"
+      });
+    }
+
+    const finalStatus = status || "Todo";
+    if (!["Todo", "In Progress", "Done"].includes(finalStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status. Must be Todo, In Progress, or Done"
+      });
+    }
+
+    const finalPriority = priority || "Medium";
+    if (!["Low", "Medium", "High"].includes(finalPriority)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid priority. Must be Low, Medium, or High"
+      });
+    }
+
+    const task = await Task.create({
+      user: req.user.userId,
+      title: title.trim(),
+      description: description ? description.trim() : "",
+      status: finalStatus,
+      priority: finalPriority,
+      dueDate: dueDate || undefined
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Task created successfully",
+      task
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// =====================================================
+// GET ALL TASKS (PAGINATION, SEARCH, FILTERING, SORTING)
+// =====================================================
+router.get("/", authMiddleware, async (req, res, next) => {
+  try {
     const {
+      search,
       status,
       priority,
       sortBy,
@@ -68,33 +164,30 @@ router.get("/", async (req, res, next) => {
       limit = 5
     } = req.query;
 
-    const filter = {};
+    const filter = {
+      user: req.user.userId
+    };
 
-
-    // STATUS FILTER
+    // Status filter
     if (status && status !== "All") {
-
-      if (status === "Todo") {
-        filter.status = "Todo";
-      }
-
-      else if (status === "In Progress") {
-        filter.status = "In Progress";
-      }
-
-      else if (status === "Done") {
-        filter.status = "Done";
+      if (["Todo", "In Progress", "Done"].includes(status)) {
+        filter.status = status;
       }
     }
 
-
-    // PRIORITY FILTER
+    // Priority filter
     if (priority && priority !== "All") {
-      filter.priority = priority;
+      if (["Low", "Medium", "High"].includes(priority)) {
+        filter.priority = priority;
+      }
     }
 
+    // Search by title (case-insensitive regex)
+    if (search && search.trim() !== "") {
+      filter.title = { $regex: search.trim(), $options: "i" };
+    }
 
-    // SORTING
+    // Sorting
     const allowedSortFields = [
       "createdAt",
       "dueDate",
@@ -103,69 +196,48 @@ router.get("/", async (req, res, next) => {
       "status"
     ];
 
-    const field = allowedSortFields.includes(sortBy)
-      ? sortBy
-      : "createdAt";
-
+    const sortField = allowedSortFields.includes(sortBy) ? sortBy : "createdAt";
     const sortOrder = order === "asc" ? 1 : -1;
 
-
-    // PAGINATION
-    const pageNumber = Math.max(
-      parseInt(page) || 1,
-      1
-    );
-
+    // Pagination
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
     const limitNumber = Math.min(
-      Math.max(parseInt(limit) || 5, 1),
+      Math.max(parseInt(limit, 10) || 5, 1),
       50
     );
+    const skip = (pageNumber - 1) * limitNumber;
 
-    const skip =
-      (pageNumber - 1) * limitNumber;
+    const totalTasks = await Task.countDocuments(filter);
 
-
-    // COUNT
-    const totalTasks =
-      await Task.countDocuments(filter);
-
-
-    // FETCH TASKS
     const tasks = await Task.find(filter)
-      .sort({
-        [field]: sortOrder
-      })
+      .sort({ [sortField]: sortOrder })
       .skip(skip)
       .limit(limitNumber);
 
-
-    // TOTAL PAGES
-    const totalPages =
-      Math.ceil(totalTasks / limitNumber);
-
+    const totalPages = Math.ceil(totalTasks / limitNumber) || 1;
 
     res.json({
+      success: true,
       tasks,
       currentPage: pageNumber,
       totalPages,
       totalTasks,
       limit: limitNumber
     });
-
   } catch (error) {
     next(error);
   }
 });
-
 
 // =====================================================
 // GET SINGLE TASK
 // =====================================================
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", authMiddleware, async (req, res, next) => {
   try {
-
-    const task =
-      await Task.findById(req.params.id);
+    const task = await Task.findOne({
+      _id: req.params.id,
+      user: req.user.userId
+    });
 
     if (!task) {
       return res.status(404).json({
@@ -174,99 +246,75 @@ router.get("/:id", async (req, res, next) => {
       });
     }
 
-    res.json(task);
-
+    res.json({
+      success: true,
+      task
+    });
   } catch (error) {
     next(error);
   }
 });
-
 
 // =====================================================
 // UPDATE TASK
 // =====================================================
-router.put("/:id", async (req, res, next) => {
+router.put("/:id", authMiddleware, async (req, res, next) => {
   try {
-
-    let {
-      title,
-      description,
-      status,
-      priority,
-      dueDate
-    } = req.body;
-
-
-    // Normalize status
-    if (status) {
-
-      if (
-        status === "In-Progress" ||
-        status === "in-progress" ||
-        status === "in progress"
-      ) {
-        status = "In Progress";
-      }
-
-      if (
-        status === "todo" ||
-        status === "TODO"
-      ) {
-        status = "Todo";
-      }
-
-      if (
-        status === "done" ||
-        status === "DONE"
-      ) {
-        status = "Done";
-      }
-
-
-      const allowedStatuses = [
-        "Todo",
-        "In Progress",
-        "Done"
-      ];
-
-      if (!allowedStatuses.includes(status)) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Invalid status. Use Todo, In Progress, or Done."
-        });
-      }
-    }
-
+    let { title, description, status, priority, dueDate } = req.body;
 
     const updateData = {};
 
-    if (title !== undefined)
-      updateData.title = title;
+    if (title !== undefined) {
+      if (!title.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "Task title cannot be empty"
+        });
+      }
+      updateData.title = title.trim();
+    }
 
-    if (description !== undefined)
-      updateData.description = description;
+    if (description !== undefined) {
+      updateData.description = description.trim();
+    }
 
-    if (status !== undefined)
+    if (status !== undefined) {
+      const allowedStatuses = ["Todo", "In Progress", "Done"];
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid status. Must be Todo, In Progress, or Done"
+        });
+      }
       updateData.status = status;
+    }
 
-    if (priority !== undefined)
+    if (priority !== undefined) {
+      const allowedPriorities = ["Low", "Medium", "High"];
+      if (!allowedPriorities.includes(priority)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid priority. Must be Low, Medium, or High"
+        });
+      }
       updateData.priority = priority;
+    }
 
-    if (dueDate !== undefined)
-      updateData.dueDate = dueDate;
+    if (dueDate !== undefined) {
+      updateData.dueDate = dueDate ? new Date(dueDate) : null;
+    }
 
-
-    const task =
-      await Task.findByIdAndUpdate(
-        req.params.id,
-        updateData,
-        {
-          new: true,
-          runValidators: true
-        }
-      );
-
+    const task = await Task.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        user: req.user.userId
+      },
+      updateData,
+      {
+        new: true,
+        runValidators: true
+      }
+    );
 
     if (!task) {
       return res.status(404).json({
@@ -275,25 +323,25 @@ router.put("/:id", async (req, res, next) => {
       });
     }
 
-
-    res.json(task);
-
+    res.json({
+      success: true,
+      message: "Task updated successfully",
+      task
+    });
   } catch (error) {
     next(error);
   }
 });
 
-
 // =====================================================
 // DELETE TASK
 // =====================================================
-router.delete("/:id", async (req, res, next) => {
+router.delete("/:id", authMiddleware, async (req, res, next) => {
   try {
-
-    const task =
-      await Task.findByIdAndDelete(
-        req.params.id
-      );
+    const task = await Task.findOneAndDelete({
+      _id: req.params.id,
+      user: req.user.userId
+    });
 
     if (!task) {
       return res.status(404).json({
@@ -306,11 +354,9 @@ router.delete("/:id", async (req, res, next) => {
       success: true,
       message: "Task deleted successfully"
     });
-
   } catch (error) {
     next(error);
   }
 });
-
 
 module.exports = router;

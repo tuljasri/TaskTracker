@@ -1,232 +1,305 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import "./App.css";
 
-const API_URL = "http://localhost:5000/api/tasks";
+const API_BASE_URL = "http://localhost:5000/api";
 
 function App() {
+  const navigate = useNavigate();
+
   // =============================
-  // STATE
+  // AUTH STATE
+  // =============================
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState("");
+
+  // =============================
+  // THEME STATE
+  // =============================
+  const [darkMode, setDarkMode] = useState(() => {
+    return localStorage.getItem("tasktracker_theme") === "dark";
+  });
+
+  // =============================
+  // DATA STATE
   // =============================
   const [tasks, setTasks] = useState([]);
-  const [allTasks, setAllTasks] = useState([]);
+  const [analytics, setAnalytics] = useState({
+    totalTasks: 0,
+    completedTasks: 0,
+    pendingTasks: 0,
+    todoTasks: 0,
+    inProgressTasks: 0,
+    highPriorityTasks: 0,
+    mediumPriorityTasks: 0,
+    lowPriorityTasks: 0,
+    overdueTasks: 0,
+    completionPercentage: 0
+  });
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
 
-  const [darkMode, setDarkMode] = useState(false);
-
-  // Form
+  // =============================
+  // FORM STATE
+  // =============================
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState("Todo");
   const [priority, setPriority] = useState("Medium");
   const [dueDate, setDueDate] = useState("");
-
-  // Edit
   const [editingId, setEditingId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [showForm, setShowForm] = useState(false);
 
-  // Filters
+  // =============================
+  // FILTER & PAGINATION STATE
+  // =============================
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [priorityFilter, setPriorityFilter] = useState("");
-  const [sortBy, setSortBy] = useState("createdAt");
-  const [order, setOrder] = useState("desc");
-
-  // Pagination
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [priorityFilter, setPriorityFilter] = useState("All");
+  const [sortOption, setSortOption] = useState("newest");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalTasks, setTotalTasks] = useState(0);
-
-
-  const LIMIT = 5;
+  const [limit, setLimit] = useState(5);
 
   // =============================
-  // GET TASK STATUS
+  // TODAY STRING FOR DUE DATE VALIDATION
   // =============================
-  const getTaskStatus = (task) => {
-    if (task.status === "Todo") return "Todo";
-    if (task.status === "In Progress") return "In Progress";
-    if (task.status === "Done") return "Done";
-
-    // Support older tasks
-    if (task.completed === true) return "Done";
-
-    return "Todo";
+  const getTodayString = () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
   };
 
+  // Check auth on load
+  useEffect(() => {
+    const storedToken = localStorage.getItem("token");
+    const storedUser = localStorage.getItem("user");
+
+    if (!storedToken) {
+      navigate("/login");
+      return;
+    }
+
+    setToken(storedToken);
+    if (storedUser) {
+      try {
+        setUser(JSON.parse(storedUser));
+      } catch {
+        setUser(null);
+      }
+    }
+  }, [navigate]);
+
+  // Persist dark mode
+  useEffect(() => {
+    localStorage.setItem("tasktracker_theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Auth header helper
+  const getAuthHeaders = useCallback(() => {
+    const currentToken = token || localStorage.getItem("token");
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${currentToken}`
+    };
+  }, [token]);
+
+  // Handle unauthorized response
+  const handleUnauthorized = useCallback(() => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    navigate("/login");
+  }, [navigate]);
+
   // =============================
-  // FETCH PAGINATED TASKS
+  // FETCH ANALYTICS
   // =============================
-  const fetchTasks = async () => {
+  const fetchAnalytics = useCallback(async () => {
+    const currentToken = token || localStorage.getItem("token");
+    if (!currentToken) return;
+
+    try {
+      setAnalyticsLoading(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/analytics`, {
+        headers: getAuthHeaders()
+      });
+
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAnalytics(data.data);
+      }
+    } catch (err) {
+      console.error("Error fetching analytics:", err);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, [token, getAuthHeaders, handleUnauthorized]);
+
+  // =============================
+  // FETCH TASKS
+  // =============================
+  const fetchTasks = useCallback(async () => {
+    const currentToken = token || localStorage.getItem("token");
+    if (!currentToken) return;
+
     try {
       setLoading(true);
       setError("");
 
       const params = new URLSearchParams();
+      if (debouncedSearch.trim()) params.append("search", debouncedSearch.trim());
+      if (statusFilter && statusFilter !== "All") params.append("status", statusFilter);
+      if (priorityFilter && priorityFilter !== "All") params.append("priority", priorityFilter);
 
-      if (statusFilter) {
-        params.append("status", statusFilter);
-      }
+      let sortBy = "createdAt";
+      let order = "desc";
 
-      if (priorityFilter) {
-        params.append("priority", priorityFilter);
+      if (sortOption === "newest") {
+        sortBy = "createdAt";
+        order = "desc";
+      } else if (sortOption === "oldest") {
+        sortBy = "createdAt";
+        order = "asc";
+      } else if (sortOption === "dueSoon") {
+        sortBy = "dueDate";
+        order = "asc";
+      } else if (sortOption === "title") {
+        sortBy = "title";
+        order = "asc";
+      } else if (sortOption === "priority") {
+        sortBy = "priority";
+        order = "desc";
       }
 
       params.append("sortBy", sortBy);
       params.append("order", order);
       params.append("page", currentPage);
-      params.append("limit", LIMIT);
+      params.append("limit", limit);
 
-      const response = await fetch(`${API_URL}?${params.toString()}`);
+      const res = await fetch(`${API_BASE_URL}/tasks?${params.toString()}`, {
+        headers: getAuthHeaders()
+      });
 
-      if (!response.ok) {
-        throw new Error("Failed to fetch tasks");
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
       }
 
-      const data = await response.json();
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || "Failed to fetch tasks");
+      }
 
       setTasks(data.tasks || []);
       setTotalPages(data.totalPages || 1);
       setTotalTasks(data.totalTasks || 0);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Could not retrieve tasks.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, debouncedSearch, statusFilter, priorityFilter, sortOption, currentPage, limit, getAuthHeaders, handleUnauthorized]);
 
-  // =============================
-  // FETCH ALL TASKS FOR ANALYTICS
-  // =============================
-  const fetchAllTasks = async () => {
-    try {
-      const response = await fetch(
-        `${API_URL}?page=1&limit=50&sortBy=createdAt&order=desc`
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch analytics data");
-      }
-
-      const data = await response.json();
-
-      setAllTasks(data.tasks || []);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // =============================
-  // INITIAL FETCH
-  // =============================
+  // Re-fetch tasks when dependencies change
   useEffect(() => {
-    fetchTasks();
-    fetchAllTasks();
-  }, [currentPage, statusFilter, priorityFilter, sortBy, order]);
+    if (token) {
+      fetchTasks();
+      fetchAnalytics();
+    }
+  }, [token, fetchTasks, fetchAnalytics]);
 
   // =============================
-  // SEARCH
+  // LOGOUT
   // =============================
-  const displayedTasks = tasks.filter((task) =>
-    task.title?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  // =============================
-  // ANALYTICS
-  // =============================
-  const totalCount = allTasks.length;
-
-  const todoCount = allTasks.filter(
-    (task) => getTaskStatus(task) === "Todo"
-  ).length;
-
-  const inProgressCount = allTasks.filter(
-    (task) => getTaskStatus(task) === "In Progress"
-  ).length;
-
-  const doneCount = allTasks.filter(
-    (task) => getTaskStatus(task) === "Done"
-  ).length;
-
-  const highPriorityCount = allTasks.filter(
-    (task) => task.priority === "High"
-  ).length;
-
-  const completionPercentage =
-    totalCount === 0
-      ? 0
-      : Math.round((doneCount / totalCount) * 100);
-
-  // =============================
-  // TODAY'S DATE
-  // =============================
-  const getTodayString = () => {
-    const today = new Date();
-
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, "0");
-    const day = String(today.getDate()).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    navigate("/login");
   };
 
   // =============================
-  // ADD / UPDATE TASK
+  // FORM SUBMISSION (CREATE / EDIT)
   // =============================
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     setError("");
+    setSuccessMsg("");
 
     if (!title.trim()) {
       setError("Task title is required.");
       return;
     }
 
-    if (dueDate && dueDate < getTodayString()) {
+    if (!editingId && dueDate && dueDate < getTodayString()) {
       setError("Due date cannot be in the past.");
       return;
     }
 
-    const taskData = {
+    const payload = {
       title: title.trim(),
       description: description.trim(),
-      status: status,
-      priority: priority,
-      dueDate: dueDate || undefined,
+      status,
+      priority,
+      dueDate: dueDate || null
     };
 
-    console.log("SENDING TASK:", taskData);
-
     try {
-      const url = editingId
-        ? `${API_URL}/${editingId}`
-        : API_URL;
-
+      setSubmitting(true);
+      const url = editingId ? `${API_BASE_URL}/tasks/${editingId}` : `${API_BASE_URL}/tasks`;
       const method = editingId ? "PUT" : "POST";
 
-      const response = await fetch(url, {
+      const res = await fetch(url, {
         method,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(taskData),
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.message || "Something went wrong."
-        );
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
       }
 
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || "Failed to save task.");
+      }
+
+      setSuccessMsg(editingId ? "Task updated successfully!" : "Task created successfully!");
       resetForm();
+      setShowForm(false);
 
       await fetchTasks();
-      await fetchAllTasks();
+      await fetchAnalytics();
+
+      setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "An error occurred while saving the task.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -247,590 +320,667 @@ function App() {
   // =============================
   const handleEdit = (task) => {
     setEditingId(task._id);
-
     setTitle(task.title || "");
     setDescription(task.description || "");
-
-    setStatus(getTaskStatus(task));
+    setStatus(task.status || "Todo");
     setPriority(task.priority || "Medium");
 
     if (task.dueDate) {
-      setDueDate(task.dueDate.substring(0, 10));
+      setDueDate(new Date(task.dueDate).toISOString().substring(0, 10));
     } else {
       setDueDate("");
     }
 
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   // =============================
   // DELETE TASK
   // =============================
   const handleDelete = async (id) => {
-    const confirmed = window.confirm(
-      "Are you sure you want to delete this task?"
-    );
-
-    if (!confirmed) return;
+    if (!window.confirm("Are you sure you want to delete this task?")) return;
 
     try {
-      const response = await fetch(`${API_URL}/${id}`, {
+      setError("");
+      const res = await fetch(`${API_BASE_URL}/tasks/${id}`, {
         method: "DELETE",
+        headers: getAuthHeaders()
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.message || "Failed to delete task."
-        );
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
       }
 
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || "Failed to delete task.");
+      }
+
+      setSuccessMsg("Task deleted successfully.");
+      setTimeout(() => setSuccessMsg(""), 3000);
+
+      // Handle page step-back if deleting last item on current page
       if (tasks.length === 1 && currentPage > 1) {
         setCurrentPage((prev) => prev - 1);
       } else {
         await fetchTasks();
       }
-
-      await fetchAllTasks();
+      await fetchAnalytics();
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Failed to delete task.");
     }
   };
 
   // =============================
-  // CHANGE STATUS
+  // QUICK STATUS TOGGLE
   // =============================
-  const handleStatusChange = async (task, newStatus) => {
+  const handleQuickStatusChange = async (task, newStatus) => {
     try {
-      setError("");
+      const res = await fetch(`${API_BASE_URL}/tasks/${task._id}`, {
+        method: "PUT",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          status: newStatus
+        })
+      });
 
-      const response = await fetch(
-        `${API_URL}/${task._id}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            title: task.title,
-            description: task.description || "",
-            status: newStatus,
-            priority: task.priority || "Medium",
-            dueDate: task.dueDate || undefined,
-          }),
-        }
-      );
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.message || "Failed to update status."
-        );
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to update task status.");
       }
 
       await fetchTasks();
-      await fetchAllTasks();
+      await fetchAnalytics();
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Failed to update status.");
     }
   };
 
-  // =============================
-  // STATUS STYLE
-  // =============================
-  const getStatusStyle = (taskStatus) => {
-    if (taskStatus === "Todo") {
-      return {
-        background: "#dcfce7",
-        color: "#166534",
-      };
-    }
-
-    if (taskStatus === "In Progress") {
-      return {
-        background: "#fef3c7",
-        color: "#92400e",
-      };
-    }
-
-    return {
-      background: "#dcfce7",
-      color: "#166534",
-    };
+  // Check if task is overdue
+  const isOverdue = (task) => {
+    if (!task.dueDate || task.status === "Done") return false;
+    const due = new Date(task.dueDate);
+    due.setHours(23, 59, 59, 999);
+    return due < new Date();
   };
 
-  // =============================
-  // PRIORITY CLASS
-  // =============================
-  const getPriorityClass = (taskPriority) => {
-    if (taskPriority === "High") {
-      return "priority priority-high";
-    }
-
-    if (taskPriority === "Low") {
-      return "priority priority-low";
-    }
-
-    return "priority priority-medium";
+  const formatDate = (dateString) => {
+    if (!dateString) return null;
+    const options = { year: "numeric", month: "short", day: "numeric" };
+    return new Date(dateString).toLocaleDateString(undefined, options);
   };
 
-  // =============================
-  // FORMAT DATE
-  // =============================
-  const formatDate = (date) => {
-    if (!date) return "No due date";
-
-    return new Date(date).toLocaleDateString();
-  };
-
-  // =============================
-  // PAGINATION
-  // =============================
-  const goToPreviousPage = () => {
-    if (currentPage > 1) {
-      setCurrentPage((prev) => prev - 1);
-    }
-  };
-
-  const goToNextPage = () => {
-    if (currentPage < totalPages) {
-      setCurrentPage((prev) => prev + 1);
-    }
-  };
-
-  // =============================
-  // FILTERS
-  // =============================
-  const handleStatusFilter = (e) => {
-    setStatusFilter(e.target.value);
+  const resetFilters = () => {
+    setSearch("");
+    setStatusFilter("All");
+    setPriorityFilter("All");
+    setSortOption("newest");
     setCurrentPage(1);
   };
 
-  const handlePriorityFilter = (e) => {
-    setPriorityFilter(e.target.value);
-    setCurrentPage(1);
-  };
+  const hasActiveFilters = search || statusFilter !== "All" || priorityFilter !== "All" || sortOption !== "newest";
 
-  const handleSortChange = (e) => {
-    const value = e.target.value;
-
-    if (value === "newest") {
-      setSortBy("createdAt");
-      setOrder("desc");
-    }
-
-    if (value === "oldest") {
-      setSortBy("createdAt");
-      setOrder("asc");
-    }
-
-    if (value === "dueSoon") {
-      setSortBy("dueDate");
-      setOrder("asc");
-    }
-
-    if (value === "title") {
-      setSortBy("title");
-      setOrder("asc");
-    }
-
-    setCurrentPage(1);
-  };
-
-  // =============================
-  // RENDER
-  // =============================
   return (
-    <div className={darkMode ? "app dark-mode" : "app"}>
-
-      {/* HEADER */}
-      <header className="header">
-        <h1>Task Tracker</h1>
-
-        <p>
-          Organize your tasks and stay productive.
-        </p>
-
-        <button
-          className="theme-btn"
-          onClick={() => setDarkMode(!darkMode)}
-        >
-          {darkMode ? "☀️ Light Mode" : "🌙 Dark Mode"}
-        </button>
-      </header>
-
-      {/* ERROR */}
-      {error && (
-        <div className="error-message">
-          {error}
-        </div>
-      )}
-
-      {/* ADD / EDIT FORM */}
-      <section className="form-card">
-        <h2>
-          {editingId ? "Edit Task" : "Add New Task"}
-        </h2>
-
-        <form
-          className="task-form"
-          onSubmit={handleSubmit}
-        >
-
-          {/* TITLE */}
-          <input
-            type="text"
-            placeholder="Task title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-
-          {/* DESCRIPTION */}
-          <textarea
-            placeholder="Task description"
-            value={description}
-            onChange={(e) =>
-              setDescription(e.target.value)
-            }
-          />
-
-          {/* STATUS */}
-          <label>Status</label>
-
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-          >
-            <option value="Todo">Todo</option>
-            <option value="In Progress">
-              In Progress
-            </option>
-            <option value="Done">Done</option>
-          </select>
-
-          {/* DUE DATE */}
-          <label>Due Date</label>
-
-          <input
-            type="date"
-            min={getTodayString()}
-            value={dueDate}
-            onChange={(e) =>
-              setDueDate(e.target.value)
-            }
-          />
-
-          {/* PRIORITY */}
-          <label>Priority</label>
-
-          <select
-            value={priority}
-            onChange={(e) =>
-              setPriority(e.target.value)
-            }
-          >
-            <option value="Low">Low</option>
-            <option value="Medium">Medium</option>
-            <option value="High">High</option>
-          </select>
-
-          {/* BUTTONS */}
-          <div className="form-buttons">
-            <button
-              type="submit"
-              className="primary-btn"
-            >
-              {editingId ? "Update Task" : "Add Task"}
-            </button>
-
-            {editingId && (
-              <button
-                type="button"
-                className="cancel-btn"
-                onClick={resetForm}
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-        </form>
-      </section>
-
-      {/* ANALYTICS */}
-      <section className="analytics-section">
-        <h2>Analytics</h2>
-
-        <div className="analytics-cards">
-
-          <div className="analytics-card">
-            <h3>Total Tasks</h3>
-            <p>{totalCount}</p>
-          </div>
-
-          <div className="analytics-card">
-            <h3>Todo</h3>
-            <p>{todoCount}</p>
-          </div>
-
-          <div className="analytics-card">
-            <h3>In Progress</h3>
-            <p>{inProgressCount}</p>
-          </div>
-
-          <div className="analytics-card">
-            <h3>Done</h3>
-            <p>{doneCount}</p>
-          </div>
-
-          {/* NEW */}
-          <div className="analytics-card">
-            <h3>Pending</h3>
-            <p>{todoCount + inProgressCount}</p>
-          </div>
-
-          <div className="analytics-card">
-            <h3>High Priority</h3>
-            <p>{highPriorityCount}</p>
-          </div>
-
-          <div className="analytics-card">
-            <h3>Completion</h3>
-            <p>{completionPercentage}%</p>
-          </div>
-
-        </div>
-      </section>
-
-
-      {/* TASK SECTION */}
-      <section>
-
-        <div className="section-header">
-          <h2>My Tasks</h2>
-
-          <span>
-            {totalTasks} task(s)
-          </span>
+    <div className={`app-container ${darkMode ? "dark-theme" : "light-theme"}`}>
+      {/* ================= TOP NAVIGATION ================= */}
+      <header className="navbar">
+        <div className="nav-brand">
+          <span className="brand-logo">⚡</span>
+          <span className="brand-title">TaskTracker</span>
         </div>
 
-        {/* SEARCH + FILTERS */}
-        <div className="search-filters">
-
-          <input
-            type="text"
-            placeholder="Search tasks..."
-            value={search}
-            onChange={(e) =>
-              setSearch(e.target.value)
-            }
-          />
-
-          <select
-            value={statusFilter}
-            onChange={handleStatusFilter}
-          >
-            <option value="">All Status</option>
-            <option value="Todo">Todo</option>
-            <option value="In Progress">
-              In Progress
-            </option>
-            <option value="Done">Done</option>
-          </select>
-
-          <select
-            value={priorityFilter}
-            onChange={handlePriorityFilter}
-          >
-            <option value="">All Priority</option>
-            <option value="Low">Low</option>
-            <option value="Medium">Medium</option>
-            <option value="High">High</option>
-          </select>
-
-          <select
-            defaultValue="newest"
-            onChange={handleSortChange}
-          >
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="dueSoon">
-              Due Soon
-            </option>
-            <option value="title">
-              Title A-Z
-            </option>
-          </select>
-
-        </div>
-
-        {/* LOADING */}
-        {loading && (
-          <div className="loading-message">
-            Loading tasks...
-          </div>
-        )}
-
-        {/* EMPTY */}
-        {!loading &&
-          displayedTasks.length === 0 && (
-            <div className="empty-state">
-              <h3>No tasks found</h3>
-              <p>
-                Try adding a task or changing your
-                filters.
-              </p>
+        <div className="nav-controls">
+          {user && (
+            <div className="user-profile">
+              <span className="user-avatar">{user.name ? user.name.charAt(0).toUpperCase() : "U"}</span>
+              <div className="user-info">
+                <span className="user-name">{user.name}</span>
+                <span className="user-email">{user.email}</span>
+              </div>
             </div>
           )}
 
-        {/* TASK LIST */}
-        {!loading &&
-          displayedTasks.length > 0 && (
-            <div className="task-list">
+          <button
+            className="btn-icon theme-toggle"
+            onClick={() => setDarkMode(!darkMode)}
+            title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            aria-label="Toggle Theme"
+          >
+            {darkMode ? "☀️" : "🌙"}
+          </button>
 
-              {displayedTasks.map((task) => {
-                const currentStatus =
-                  getTaskStatus(task);
+          <button className="btn-logout" onClick={handleLogout} title="Log Out">
+            <span>Log out</span>
+          </button>
+        </div>
+      </header>
+
+      <main className="main-content">
+        {/* ================= ALERTS ================= */}
+        {error && (
+          <div className="app-alert alert-error">
+            <span className="alert-icon">⚠️</span>
+            <span className="alert-text">{error}</span>
+            <button className="alert-close" onClick={() => setError("")}>✕</button>
+          </div>
+        )}
+
+        {successMsg && (
+          <div className="app-alert alert-success">
+            <span className="alert-icon">✅</span>
+            <span className="alert-text">{successMsg}</span>
+            <button className="alert-close" onClick={() => setSuccessMsg("")}>✕</button>
+          </div>
+        )}
+
+        {/* ================= ANALYTICS DASHBOARD ================= */}
+        <section className="analytics-dashboard">
+          <div className="dashboard-header">
+            <div>
+              <h2>Overview & Insights</h2>
+              <p>Real-time analytics and task tracking progress</p>
+            </div>
+            {analyticsLoading && <span className="refresh-spinner">🔄 Refreshing...</span>}
+          </div>
+
+          <div className="stats-grid">
+            <div className="stat-card primary">
+              <div className="stat-icon">📋</div>
+              <div className="stat-meta">
+                <span className="stat-label">Total Tasks</span>
+                <span className="stat-value">{analytics.totalTasks}</span>
+              </div>
+            </div>
+
+            <div className="stat-card success">
+              <div className="stat-icon">✅</div>
+              <div className="stat-meta">
+                <span className="stat-label">Completed</span>
+                <span className="stat-value">{analytics.completedTasks}</span>
+              </div>
+            </div>
+
+            <div className="stat-card warning">
+              <div className="stat-icon">⏳</div>
+              <div className="stat-meta">
+                <span className="stat-label">Pending</span>
+                <span className="stat-value">{analytics.pendingTasks}</span>
+              </div>
+            </div>
+
+            <div className="stat-card info">
+              <div className="stat-icon">🔄</div>
+              <div className="stat-meta">
+                <span className="stat-label">In Progress</span>
+                <span className="stat-value">{analytics.inProgressTasks}</span>
+              </div>
+            </div>
+
+            <div className="stat-card danger">
+              <div className="stat-icon">🔥</div>
+              <div className="stat-meta">
+                <span className="stat-label">High Priority</span>
+                <span className="stat-value">{analytics.highPriorityTasks}</span>
+              </div>
+            </div>
+
+            <div className={`stat-card ${analytics.overdueTasks > 0 ? "danger" : "neutral"}`}>
+              <div className="stat-icon">⏰</div>
+              <div className="stat-meta">
+                <span className="stat-label">Overdue</span>
+                <span className="stat-value">{analytics.overdueTasks}</span>
+              </div>
+            </div>
+
+            <div className="stat-card accent">
+              <div className="stat-icon">🎯</div>
+              <div className="stat-meta">
+                <span className="stat-label">Completion Rate</span>
+                <span className="stat-value">{analytics.completionPercentage}%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Visual Progress & Distribution Bars */}
+          <div className="charts-summary">
+            <div className="chart-bar-card">
+              <div className="bar-header">
+                <span className="bar-title">Overall Completion</span>
+                <span className="bar-val">{analytics.completionPercentage}%</span>
+              </div>
+              <div className="progress-bar-bg">
+                <div
+                  className="progress-bar-fill"
+                  style={{ width: `${analytics.completionPercentage}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="chart-bar-card">
+              <div className="bar-header">
+                <span className="bar-title">Status Breakdown</span>
+                <span className="bar-legend">
+                  <span className="legend-dot todo"></span> Todo: {analytics.todoTasks}
+                  <span className="legend-dot in-prog"></span> In Progress: {analytics.inProgressTasks}
+                  <span className="legend-dot done"></span> Done: {analytics.completedTasks}
+                </span>
+              </div>
+              <div className="segmented-bar">
+                {analytics.totalTasks > 0 ? (
+                  <>
+                    <div
+                      className="segment todo"
+                      style={{ width: `${(analytics.todoTasks / analytics.totalTasks) * 100}%` }}
+                      title={`Todo: ${analytics.todoTasks}`}
+                    ></div>
+                    <div
+                      className="segment in-prog"
+                      style={{ width: `${(analytics.inProgressTasks / analytics.totalTasks) * 100}%` }}
+                      title={`In Progress: ${analytics.inProgressTasks}`}
+                    ></div>
+                    <div
+                      className="segment done"
+                      style={{ width: `${(analytics.completedTasks / analytics.totalTasks) * 100}%` }}
+                      title={`Done: ${analytics.completedTasks}`}
+                    ></div>
+                  </>
+                ) : (
+                  <div className="segment empty" style={{ width: "100%" }}></div>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ================= ACTION BAR & TASK CREATION ================= */}
+        <section className="actions-section">
+          <div className="section-title-row">
+            <div>
+              <h2>Task Management</h2>
+              <p>Create, organize, prioritize, and track your daily work</p>
+            </div>
+
+            <button
+              className={`btn-primary add-task-btn ${showForm ? "btn-active" : ""}`}
+              onClick={() => {
+                if (showForm && editingId) {
+                  resetForm();
+                } else {
+                  setShowForm(!showForm);
+                }
+              }}
+            >
+              {showForm ? (editingId ? "Cancel Editing" : "✕ Close Form") : "➕ Add New Task"}
+            </button>
+          </div>
+
+          {/* ADD / EDIT TASK FORM */}
+          {showForm && (
+            <div className="form-card-container">
+              <div className="form-card">
+                <div className="form-header">
+                  <h3>{editingId ? "✏️ Edit Task" : "✨ Create New Task"}</h3>
+                  <p>{editingId ? "Modify task attributes and save changes." : "Fill in the details below to add a new task."}</p>
+                </div>
+
+                <form onSubmit={handleSubmit} className="task-form">
+                  <div className="form-grid">
+                    <div className="form-group full-width">
+                      <label htmlFor="task-title">Title *</label>
+                      <input
+                        id="task-title"
+                        type="text"
+                        placeholder="e.g. Implement user authentication..."
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        required
+                        autoFocus
+                      />
+                    </div>
+
+                    <div className="form-group full-width">
+                      <label htmlFor="task-desc">Description</label>
+                      <textarea
+                        id="task-desc"
+                        rows={3}
+                        placeholder="Add additional details, links, or notes..."
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="task-status">Status</label>
+                      <select
+                        id="task-status"
+                        value={status}
+                        onChange={(e) => setStatus(e.target.value)}
+                      >
+                        <option value="Todo">📝 Todo</option>
+                        <option value="In Progress">🔄 In Progress</option>
+                        <option value="Done">✅ Done</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="task-priority">Priority</label>
+                      <select
+                        id="task-priority"
+                        value={priority}
+                        onChange={(e) => setPriority(e.target.value)}
+                      >
+                        <option value="Low">🟢 Low</option>
+                        <option value="Medium">🟡 Medium</option>
+                        <option value="High">🔴 High</option>
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label htmlFor="task-due">Due Date</label>
+                      <input
+                        id="task-due"
+                        type="date"
+                        min={!editingId ? getTodayString() : undefined}
+                        value={dueDate}
+                        onChange={(e) => setDueDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-actions">
+                    <button type="submit" className="btn-primary" disabled={submitting}>
+                      {submitting ? "Saving..." : editingId ? "Update Task" : "Save Task"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        resetForm();
+                        setShowForm(false);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* ================= SEARCH & FILTERS BAR ================= */}
+        <section className="filters-section">
+          <div className="filters-card">
+            <div className="search-box">
+              <span className="search-icon">🔍</span>
+              <input
+                type="text"
+                placeholder="Search tasks by title..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              {search && (
+                <button className="clear-search-btn" onClick={() => setSearch("")}>
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div className="filter-controls">
+              <div className="select-wrapper">
+                <label>Status:</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => {
+                    setStatusFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                >
+                  <option value="All">All Statuses</option>
+                  <option value="Todo">Todo</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="Done">Done</option>
+                </select>
+              </div>
+
+              <div className="select-wrapper">
+                <label>Priority:</label>
+                <select
+                  value={priorityFilter}
+                  onChange={(e) => {
+                    setPriorityFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                >
+                  <option value="All">All Priorities</option>
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Low">Low</option>
+                </select>
+              </div>
+
+              <div className="select-wrapper">
+                <label>Sort By:</label>
+                <select
+                  value={sortOption}
+                  onChange={(e) => {
+                    setSortOption(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                >
+                  <option value="newest">Newest First</option>
+                  <option value="oldest">Oldest First</option>
+                  <option value="dueSoon">Due Soonest</option>
+                  <option value="priority">Highest Priority</option>
+                  <option value="title">Title (A-Z)</option>
+                </select>
+              </div>
+
+              {hasActiveFilters && (
+                <button className="btn-reset-filters" onClick={resetFilters}>
+                  ↺ Reset
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ================= TASK LIST SECTION ================= */}
+        <section className="task-list-section">
+          <div className="list-meta-header">
+            <span className="results-count">
+              Showing <strong>{tasks.length}</strong> of <strong>{totalTasks}</strong> task(s)
+            </span>
+
+            <div className="page-size-selector">
+              <label>Show:</label>
+              <select
+                value={limit}
+                onChange={(e) => {
+                  setLimit(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+              >
+                <option value={5}>5 per page</option>
+                <option value={10}>10 per page</option>
+                <option value={20}>20 per page</option>
+              </select>
+            </div>
+          </div>
+
+          {/* LOADING STATE */}
+          {loading && (
+            <div className="loading-state">
+              <div className="spinner"></div>
+              <p>Loading your tasks...</p>
+            </div>
+          )}
+
+          {/* EMPTY STATE */}
+          {!loading && tasks.length === 0 && (
+            <div className="empty-state-card">
+              <div className="empty-icon">📭</div>
+              <h3>No tasks found</h3>
+              <p>
+                {hasActiveFilters
+                  ? "No tasks match the active filters or search term."
+                  : "You haven't created any tasks yet. Get started by adding one!"}
+              </p>
+              {hasActiveFilters ? (
+                <button className="btn-secondary" onClick={resetFilters}>
+                  Clear Filters
+                </button>
+              ) : (
+                <button
+                  className="btn-primary"
+                  onClick={() => {
+                    resetForm();
+                    setShowForm(true);
+                  }}
+                >
+                  ➕ Create First Task
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* TASK ITEMS */}
+          {!loading && tasks.length > 0 && (
+            <div className="tasks-container">
+              {tasks.map((task) => {
+                const overdue = isOverdue(task);
+                const isCompleted = task.status === "Done";
 
                 return (
                   <div
-                    className={
-                      currentStatus === "Done"
-                        ? "task-card completed"
-                        : "task-card"
-                    }
                     key={task._id}
+                    className={`task-item-card ${isCompleted ? "task-completed" : ""} ${
+                      overdue ? "task-overdue" : ""
+                    }`}
                   >
+                    <div className="task-main">
+                      <div className="task-top-bar">
+                        <div className="task-badges">
+                          <span className={`badge-status status-${task.status.toLowerCase().replace(/\s+/g, "-")}`}>
+                            {task.status}
+                          </span>
+                          <span className={`badge-priority priority-${task.priority.toLowerCase()}`}>
+                            {task.priority} Priority
+                          </span>
+                          {overdue && <span className="badge-overdue">⚠️ Overdue</span>}
+                        </div>
 
-                    {/* TITLE + STATUS */}
-                    <div className="task-title-row">
-
-                      <h3>{task.title}</h3>
-
-                      <span
-                        className="status"
-                        style={getStatusStyle(
-                          currentStatus
+                        {task.dueDate && (
+                          <div className={`task-due-info ${overdue ? "due-overdue" : ""}`}>
+                            📅 <span>Due: {formatDate(task.dueDate)}</span>
+                          </div>
                         )}
-                      >
-                        {currentStatus}
-                      </span>
+                      </div>
 
+                      <h4 className="task-title">{task.title}</h4>
+
+                      {task.description && (
+                        <p className="task-description">{task.description}</p>
+                      )}
+
+                      <div className="task-footer-meta">
+                        <span>Created: {formatDate(task.createdAt)}</span>
+                      </div>
                     </div>
 
-                    {/* DESCRIPTION */}
-                    {task.description && (
-                      <p className="description">
-                        {task.description}
-                      </p>
-                    )}
-
-                    {/* DUE DATE */}
-                    {task.dueDate && (
-                      <p className="due-date">
-                        📅 {formatDate(task.dueDate)}
-                      </p>
-                    )}
-
-                    {/* PRIORITY */}
-                    <p
-                      className={getPriorityClass(
-                        task.priority
-                      )}
-                    >
-                      Priority: {task.priority}
-                    </p>
-
-                    {/* ACTIONS */}
-                    <div className="task-actions">
-
-                      {/* STATUS ACTION */}
-                      {currentStatus !== "Done" && (
+                    <div className="task-actions-col">
+                      {isCompleted ? (
                         <button
-                          className="complete-btn"
-                          onClick={() =>
-                            handleStatusChange(
-                              task,
-                              "Done"
-                            )
-                          }
+                          className="btn-action btn-mark-todo"
+                          onClick={() => handleQuickStatusChange(task, "Todo")}
+                          title="Mark as Todo"
                         >
-                          Mark Done
+                          ↺ Todo
+                        </button>
+                      ) : (
+                        <button
+                          className="btn-action btn-mark-done"
+                          onClick={() => handleQuickStatusChange(task, "Done")}
+                          title="Mark as Done"
+                        >
+                          ✓ Done
                         </button>
                       )}
 
-                      {currentStatus === "Done" && (
+                      {task.status !== "In Progress" && !isCompleted && (
                         <button
-                          className="complete-btn"
-                          onClick={() =>
-                            handleStatusChange(
-                              task,
-                              "Todo"
-                            )
-                          }
+                          className="btn-action btn-mark-in-prog"
+                          onClick={() => handleQuickStatusChange(task, "In Progress")}
+                          title="Mark as In Progress"
                         >
-                          Mark Todo
+                          ▶ In Prog
                         </button>
                       )}
 
-                      {/* EDIT */}
                       <button
-                        className="edit-btn"
-                        onClick={() =>
-                          handleEdit(task)
-                        }
+                        className="btn-action btn-edit"
+                        onClick={() => handleEdit(task)}
+                        title="Edit Task"
                       >
-                        Edit
+                        ✏️ Edit
                       </button>
 
-                      {/* DELETE */}
                       <button
-                        className="delete-btn"
-                        onClick={() =>
-                          handleDelete(task._id)
-                        }
+                        className="btn-action btn-delete"
+                        onClick={() => handleDelete(task._id)}
+                        title="Delete Task"
                       >
-                        Delete
+                        🗑️ Delete
                       </button>
-
                     </div>
                   </div>
                 );
               })}
-
             </div>
           )}
 
-        {/* PAGINATION */}
-        {!loading && totalPages > 1 && (
-          <div className="pagination">
+          {/* ================= PAGINATION CONTROLS ================= */}
+          {!loading && totalPages > 1 && (
+            <div className="pagination-bar">
+              <button
+                className="btn-page"
+                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+              >
+                ‹ Previous
+              </button>
 
-            <button
-              onClick={goToPreviousPage}
-              disabled={currentPage === 1}
-            >
-              Previous
-            </button>
+              <div className="page-numbers">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+                  <button
+                    key={pageNum}
+                    className={`btn-page-number ${currentPage === pageNum ? "active" : ""}`}
+                    onClick={() => setCurrentPage(pageNum)}
+                  >
+                    {pageNum}
+                  </button>
+                ))}
+              </div>
 
-            <span>
-              Page {currentPage} of {totalPages}
-            </span>
-
-            <button
-              onClick={goToNextPage}
-              disabled={currentPage === totalPages}
-            >
-              Next
-            </button>
-
-          </div>
-        )}
-
-      </section>
+              <button
+                className="btn-page"
+                onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+              >
+                Next ›
+              </button>
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   );
 }

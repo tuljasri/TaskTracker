@@ -1,81 +1,75 @@
-const cors = require("cors");
 const express = require("express");
+const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 
+const authRoutes = require("./routes/authRoutes");
 const taskRoutes = require("./routes/taskRoutes");
+const errorHandler = require("./middleware/errorMiddleware");
 
 const app = express();
-
 const PORT = process.env.PORT || 5000;
 
+// =====================================================
+// CORS CONFIGURATION
+// =====================================================
 app.use(
   cors({
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type"],
+    origin: ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
   })
 );
 
+// =====================================================
+// JSON PARSER
+// =====================================================
 app.use(express.json());
 
-app.use("/api/tasks", taskRoutes);
-
-//global error handler
-app.use((err, req, res, next) => {
-  console.error(err);
-
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || "Internal Server Error",
+// =====================================================
+// ROUTES
+// =====================================================
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "Task Tracker API is live and operational!"
   });
 });
 
+app.use("/api/auth", authRoutes);
+app.use("/api/tasks", taskRoutes);
 
-app.get("/", (req, res) => {
-  res.send("Task Tracker API is running!");
-});
-
+// =====================================================
+// 404 HANDLER
+// =====================================================
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: "Route not found",
+    message: `Route not found: ${req.method} ${req.originalUrl}`
   });
 });
 
-app.use((error, req, res, next) => {
-  console.error("Error:", error);
+// =====================================================
+// GLOBAL ERROR HANDLER
+// =====================================================
+app.use(errorHandler);
 
-  if (error.name === "ValidationError") {
-    return res.status(400).json({
-      success: false,
-      message: "Validation error",
-      errors: Object.values(error.errors).map((err) => err.message),
-    });
-  }
-
-  if (error.name === "CastError") {
-    return res.status(400).json({
-      success: false,
-      message: "Invalid task ID",
-    });
-  }
-
-  res.status(500).json({
-    success: false,
-    message: "Internal server error",
-  });
-});
+// =====================================================
+// MONGODB CONNECTION & SERVER LAUNCH
+// =====================================================
+const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/task_tracker";
 
 mongoose
-  .connect(process.env.MONGO_URI)
+  .connect(MONGO_URI)
   .then(() => {
-    console.log("MongoDB connected successfully");
-
+    console.log(" Connected to MongoDB successfully");
     app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(` Task Tracker Server running on http://localhost:${PORT}`);
     });
   })
   .catch((error) => {
-    console.error("MongoDB connection failed:", error.message);
+    console.error("❌ MongoDB connection error:", error.message);
   });
+
+module.exports = app;
